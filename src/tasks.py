@@ -19,24 +19,45 @@ from openrelik_worker_common.task_utils import create_task_result, get_input_fil
 
 from .app import celery
 
-# Task name used to register and route the task to the correct queue.
-TASK_NAME = "your-worker-package-name.tasks.your_task_name"
+TASK_NAME = "openrelik-worker-volatility.tasks.volatility"
 
 # Task metadata for registration in the core system.
 TASK_METADATA = {
-    "display_name": "<REPLACE_WITH_NAME_OF_THE_WORKER>",
-    "description": "<REPLACE_WITH_DESCRIPTION_OF_THE_WORKER>",
-    # Configuration that will be rendered as a web for in the UI, and any data entered
-    # by the user will be available to the task function when executing (task_config).
+    "display_name": "Volatility",
+    "description": "Run a pre-defined set of Volatility3 plugins on a memory Image (see options).",
     "task_config": [
         {
-            "name": "<REPLACE_WITH_NAME>",
-            "label": "<REPLACE_WITH_LABEL>",
-            "description": "<REPLACE_WITH_DESCRIPTION>",
-            "type": "<REPLACE_WITH_TYPE>",  # Types supported: text, textarea, checkbox
-            "required": False,
+            "name": "Yara rules",
+            "label": "rule test { condition: true }",
+            "description": "Run these Yara rules using the YaraScan plugin.",
+            "type": "textarea",
+            "required": True,
+        },
+        {
+            "name": "OS group",
+            "label": "win,lin,macos",
+            "default": "win",
+            "description": "OS group of plugins to run.",
+            "type": "text",
+            "required": True,
+        },
+        {
+            "name": "Output format",
+            "label": "txt,json,md",
+            "default": "txt",
+            "description": "Output format for the results.",
+            "type": "text",
+            "required": True,
         },
     ],
+}
+
+PLUGIN_PLATFORM_MAP = {
+    "win": {
+        "windows.info": {"params": []},
+        "windows.pslist": {"params": []},
+        "windows.pstree": {"params": []},
+    },
 }
 
 
@@ -63,26 +84,105 @@ def command(
     """
     input_files = get_input_files(pipe_result, input_files or [])
     output_files = []
-    base_command = ["<REPLACE_WITH_COMMAND>"]
+    output_format = task_config.get("Output format") or "txt"
+    if output_format in ("json", "md"):
+        base_command = ["vol", "-r", "json", "-f"]
+    else:
+        base_command = ["vol", "-f"]
     base_command_string = " ".join(base_command)
 
+    os_group = task_config.get("OS group") or "win"
+    plugins = PLUGIN_PLATFORM_MAP.get(os_group)
+    if not plugins:
+        raise RuntimeError(f"No plugins found for specified OS group: {plugins}")
+
+    print(task_config, os_group)
+
+    yara_rule = task_config.get("Yara rules")
+    yara_rule = task_config.get("yara_rules")
+
+    if yara_rule and os_group == "win":
+        yara_rules_file = create_output_file(output_path, display_name="yara_rules.yar")
+        with open(yara_rules_file.path, "w") as fh:
+            fh.write(yara_rule)
+        plugins["windows.vadyarascan.VadYaraScan"] = {
+            "params": [
+                "--yara-file",
+                yara_rules_file.path,
+            ]
+        }
+
+    if not input_files:
+        raise RuntimeError("No input files provided")
+
+    print(f"Running Volatility3 with the following plugins: {plugins}")
+
     for input_file in input_files:
-        output_file = create_output_file(
-            output_path,
-            display_name=input_file.get("display_name"),
-            extension="<REPLACE_WITH_FILE_EXTENSION>",
-            data_type="<[OPTIONAL]_REPLACE_WITH_DATA_TYPE>",
+        command_with_file = base_command.copy()
+        command_with_file.append(input_file.get("path"))
+
+        total_plugins = len(plugins)
+        completed_plugins = 0
+        failed_plugins = 0
+
+        self.send_event(
+            "task-progress",
+            data={
+                "total_plugins": total_plugins,
+                "plugins_completed": completed_plugins,
+            },
         )
-        command = base_command + [input_file.get("path")]
 
-        # Run the command
-        with open(output_file.path, "w") as fh:
-            subprocess.Popen(command, stdout=fh)
+        processes = []
 
-        output_files.append(output_file.to_dict())
+        for plugin_name, commands in plugins.items():
+            print(f"Running plugin: {plugin_name}")
+
+            output_filename = (
+                f"{input_file.get('display_name')}_{plugin_name}.{output_format}"
+            )
+            output_file = create_output_file(
+                output_path,
+                display_name=output_filename,
+            )
+
+            command_with_plugin = command_with_file.copy()
+            command_with_plugin.append(plugin_name)
+
+            if commands.get("params"):
+                command_with_plugin.extend(commands["params"])
+
+            print(f"Running command: {command_with_plugin}")
+
+            with open(output_file.path, "w+") as fh:
+                p = subprocess.Popen(command_with_plugin, stdout=fh)
+                processes.append(p)
+                output_files.append(output_file.to_dict())
+
+        for p in processes:
+            p.wait()
+            if p.returncode == 0:
+                completed_plugins += 1
+                self.send_event(
+                    "task-progress",
+                    data={
+                        "total_plugins": total_plugins,
+                        "plugins_completed": completed_plugins,
+                    },
+                )
+            else:
+                failed_plugins += 1
+                self.send_event(
+                    "task-progress",
+                    data={
+                        "total_plugins": total_plugins,
+                        "plugins_completed": completed_plugins,
+                        "plugins_failed": failed_plugins,
+                    },
+                )
 
     if not output_files:
-        raise RuntimeError("<REPLACE_WITH_ERROR_STRING>")
+        raise RuntimeError("No output files generated.")
 
     return create_task_result(
         output_files=output_files,
