@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import glob
+import os
 import subprocess
 
 from openrelik_worker_common.file_utils import create_output_file
@@ -31,7 +33,7 @@ TASK_METADATA = {
             "label": "rule test { condition: true }",
             "description": "Run these Yara rules using the YaraScan plugin.",
             "type": "textarea",
-            "required": True,
+            "required": False,
         },
         {
             "name": "OS group",
@@ -52,13 +54,26 @@ TASK_METADATA = {
     ],
 }
 
-PLUGIN_PLATFORM_MAP = {
-    "win": {
-        "windows.info": {"params": []},
-        "windows.pslist": {"params": []},
-        "windows.pstree": {"params": []},
-    },
-}
+
+def add_dir_glob_to_output(source_directory: str, glob_pattern: str, output_files):
+    """Run a glob pattern on a directory and add the files to the output_files list.
+
+    Args:
+        source_directory: The directory to search.
+        glob: The glob pattern to use.
+        output_files: The list to append the files to.
+
+    """
+    for file in glob.glob(os.path.join(source_directory, glob_pattern)):
+        output_file = create_output_file(
+            source_directory,
+            display_name=os.path.basename(file),
+        )
+        with open(output_file.path, "wb") as dst:
+            with open(file, "rb") as src:
+                dst.write(src.read())
+
+        output_files.append(output_file.to_dict())
 
 
 @celery.task(bind=True, name=TASK_NAME, metadata=TASK_METADATA)
@@ -82,13 +97,23 @@ def command(
     Returns:
         Base64-encoded dictionary containing task results.
     """
+
+    PLUGIN_PLATFORM_MAP = {
+        "win": {
+            "windows.info": {"params": []},
+            "windows.pslist": {"params": ["--dump"]},
+            "windows.pstree": {"params": []},
+        },
+    }
+
     input_files = get_input_files(pipe_result, input_files or [])
     output_files = []
     output_format = task_config.get("Output format") or "txt"
     if output_format in ("json", "md"):
-        base_command = ["vol", "-r", "json", "-f"]
+        base_command = ["vol", "-o", output_path, "-r", "json", "-f"]
     else:
-        base_command = ["vol", "-f"]
+        base_command = ["vol", "-o", output_path, "-f"]
+
     base_command_string = " ".join(base_command)
 
     os_group = task_config.get("OS group") or "win"
@@ -96,10 +121,7 @@ def command(
     if not plugins:
         raise RuntimeError(f"No plugins found for specified OS group: {plugins}")
 
-    print(task_config, os_group)
-
     yara_rule = task_config.get("Yara rules")
-    yara_rule = task_config.get("yara_rules")
 
     if yara_rule and os_group == "win":
         yara_rules_file = create_output_file(output_path, display_name="yara_rules.yar")
@@ -111,6 +133,7 @@ def command(
                 yara_rules_file.path,
             ]
         }
+        output_files.append(yara_rules_file.to_dict())
 
     if not input_files:
         raise RuntimeError("No input files provided")
@@ -180,6 +203,8 @@ def command(
                         "plugins_failed": failed_plugins,
                     },
                 )
+
+        add_dir_glob_to_output(output_path, "*.dmp", output_files)
 
     if not output_files:
         raise RuntimeError("No output files generated.")
