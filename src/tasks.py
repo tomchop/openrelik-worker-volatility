@@ -17,6 +17,7 @@ import os
 import subprocess
 
 from openrelik_worker_common.file_utils import create_output_file
+from openrelik_worker_common.reporting import Report
 from openrelik_worker_common.task_utils import create_task_result, get_input_files
 
 from .app import celery
@@ -74,6 +75,30 @@ def add_dir_glob_to_output(source_directory: str, glob_pattern: str, output_file
                 dst.write(src.read())
 
         output_files.append(output_file.to_dict())
+
+
+def generate_report(plugin_output_map, output_path, prefix):
+    report = Report("Volatility3 Plugin Execution")
+    plugins_section = report.add_section()
+    plugins_section.add_paragraph(
+        f"The following plugins were executed: {list(plugin_output_map.keys())}"
+    )
+
+    for plugin_name, output_file_path in plugin_output_map.items():
+        plugin_output_section = report.add_section()
+        plugin_output_section.add_header(f"Plugin: {plugin_name}", level=2)
+        with open(output_file_path, "r") as fh:
+            plugin_output_section.add_code_block(fh.read())
+
+    report_file = create_output_file(
+        output_path,
+        display_name=f"{prefix}-volatility-report.md",
+        data_type="worker:openrelik:volatility:report",
+    )
+    with open(report_file.path, "w", encoding="utf-8") as fh:
+        fh.write(report.to_markdown())
+
+    return report_file
 
 
 @celery.task(bind=True, name=TASK_NAME, metadata=TASK_METADATA)
@@ -157,6 +182,7 @@ def command(
         )
 
         processes = []
+        plugin_output_map = {}
 
         for plugin_name, commands in plugins.items():
             print(f"Running plugin: {plugin_name}")
@@ -181,6 +207,7 @@ def command(
                 p = subprocess.Popen(command_with_plugin, stdout=fh)
                 processes.append(p)
                 output_files.append(output_file.to_dict())
+                plugin_output_map[plugin_name] = output_file.path
 
         for p in processes:
             p.wait()
@@ -203,6 +230,11 @@ def command(
                         "plugins_failed": failed_plugins,
                     },
                 )
+
+        report_file = generate_report(
+            plugin_output_map, output_path, input_file.get("display_name")
+        )
+        output_files.append(report_file.to_dict())
 
         add_dir_glob_to_output(output_path, "*.dmp", output_files)
 
