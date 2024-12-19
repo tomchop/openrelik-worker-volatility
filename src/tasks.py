@@ -15,12 +15,16 @@
 import glob
 import os
 import subprocess
+import logging
 
 from openrelik_worker_common.file_utils import create_output_file
 from openrelik_worker_common.reporting import Report
 from openrelik_worker_common.task_utils import create_task_result, get_input_files
 
 from .app import celery
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 TASK_NAME = "openrelik-worker-volatility.tasks.volatility"
 
@@ -163,7 +167,7 @@ def command(
     if not input_files:
         raise RuntimeError("No input files provided")
 
-    print(f"Running Volatility3 with the following plugins: {plugins}")
+    logger.info(f"Running Volatility3 with the following plugins: {plugins}")
 
     for input_file in input_files:
         command_with_file = base_command.copy()
@@ -185,7 +189,7 @@ def command(
         plugin_output_map = {}
 
         for plugin_name, commands in plugins.items():
-            print(f"Running plugin: {plugin_name}")
+            logger.info(f"Running plugin: {plugin_name}")
 
             output_filename = (
                 f"{input_file.get('display_name')}_{plugin_name}.{output_format}"
@@ -201,7 +205,7 @@ def command(
             if commands.get("params"):
                 command_with_plugin.extend(commands["params"])
 
-            print(f"Running command: {command_with_plugin}")
+            logger.info(f"Running command: {command_with_plugin}")
 
             with open(output_file.path, "w+") as fh:
                 p = subprocess.Popen(command_with_plugin, stdout=fh)
