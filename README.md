@@ -1,5 +1,7 @@
 # Volatility OpenRelik worker
 
+[![Python unit tests](https://github.com/tomchop/openrelik-worker-volatility/actions/workflows/unittests.yml/badge.svg)](https://github.com/tomchop/openrelik-worker-volatility/actions/workflows/unittests.yml)
+
 ## Overview
 
 This worker runs a couple of basic plugins on a memory dump using the Volatility
