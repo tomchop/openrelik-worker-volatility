@@ -60,6 +60,45 @@ TASK_METADATA = {
 }
 
 
+def generate_base_command(output_path, task_config, plugins):
+    output_format = task_config.get("Output format") or "txt"
+    extra_files = []
+
+    if output_format in ("json", "md"):
+        base_command = ["vol", "-o", output_path, "-r", "json", "-f"]
+    else:
+        base_command = ["vol", "-o", output_path, "-f"]
+
+    # Set up VadYaraScan plugin with Yara rules if provided
+    yara_rule = task_config.get("Yara rules")
+    if yara_rule and "windows.vadyarascan.VadYaraScan" in plugins:
+        yara_rules_file = create_output_file(output_path, display_name="yara_rules.yar")
+        with open(yara_rules_file.path, "w") as fh:
+            fh.write(yara_rule)
+        plugins["windows.vadyarascan.VadYaraScan"] = {
+            "params": [
+                "--yara-file",
+                yara_rules_file.path,
+            ]
+        }
+        extra_files.append(yara_rules_file)
+
+    return base_command, extra_files
+
+
+def generate_commands(base_command, input_file, plugins):
+    command_with_file = base_command.copy()
+
+    for plugin_name, commands in plugins.items():
+        command_with_plugin = command_with_file.copy()
+        command_with_plugin.append(plugin_name)
+
+        if commands.get("params"):
+            command_with_plugin.extend(commands["params"])
+
+        yield plugin_name, command_with_plugin
+
+
 def add_dir_glob_to_output(source_directory: str, glob_pattern: str, output_files):
     """Run a glob pattern on a directory and add the files to the output_files list.
 
@@ -132,47 +171,27 @@ def command(
             "windows.info": {"params": []},
             "windows.pslist": {"params": ["--dump"]},
             "windows.pstree": {"params": []},
+            "windows.vadyarascan.VadYaraScan": None,
         },
     }
-
-    input_files = get_input_files(pipe_result, input_files or [])
-    output_files = []
-    output_format = task_config.get("Output format") or "txt"
-    if output_format in ("json", "md"):
-        base_command = ["vol", "-o", output_path, "-r", "json", "-f"]
-    else:
-        base_command = ["vol", "-o", output_path, "-f"]
-
-    base_command_string = " ".join(base_command)
 
     os_group = task_config.get("OS group") or "win"
     plugins = PLUGIN_PLATFORM_MAP.get(os_group)
     if not plugins:
         raise RuntimeError(f"No plugins found for specified OS group: {plugins}")
 
-    yara_rule = task_config.get("Yara rules")
-
-    if yara_rule and os_group == "win":
-        yara_rules_file = create_output_file(output_path, display_name="yara_rules.yar")
-        with open(yara_rules_file.path, "w") as fh:
-            fh.write(yara_rule)
-        plugins["windows.vadyarascan.VadYaraScan"] = {
-            "params": [
-                "--yara-file",
-                yara_rules_file.path,
-            ]
-        }
-        output_files.append(yara_rules_file.to_dict())
-
+    output_files = []
+    input_files = get_input_files(pipe_result, input_files or [])
     if not input_files:
         raise RuntimeError("No input files provided")
 
+    base_command, extra_files = generate_base_command(output_path, task_config, plugins)
+    for extra_file in extra_files:
+        output_files.append(extra_file.to_dict())
+
     logger.info(f"Running Volatility3 with the following plugins: {plugins}")
 
-    for input_file in input_files:
-        command_with_file = base_command.copy()
-        command_with_file.append(input_file.get("path"))
-
+    for idx, nput_file in enumerate(input_files):
         total_plugins = len(plugins)
         completed_plugins = 0
         failed_plugins = 0
@@ -180,6 +199,8 @@ def command(
         self.send_event(
             "task-progress",
             data={
+                "file_num": idx,
+                "total_files": len(input_files),
                 "total_plugins": total_plugins,
                 "plugins_completed": completed_plugins,
             },
@@ -188,27 +209,23 @@ def command(
         processes = []
         plugin_output_map = {}
 
-        for plugin_name, commands in plugins.items():
+        for plugin_name, command in generate_commands(
+            base_command, input_file, plugins
+        ):
             logger.info(f"Running plugin: {plugin_name}")
 
-            output_filename = (
-                f"{input_file.get('display_name')}_{plugin_name}.{output_format}"
-            )
+            display_name = input_file.get("display_name")
+            output_format = task_config.get("Output format") or "txt"
+            output_filename = f"{display_name}_{plugin_name}.{output_format}"
             output_file = create_output_file(
                 output_path,
                 display_name=output_filename,
             )
 
-            command_with_plugin = command_with_file.copy()
-            command_with_plugin.append(plugin_name)
-
-            if commands.get("params"):
-                command_with_plugin.extend(commands["params"])
-
-            logger.info(f"Running command: {command_with_plugin}")
+            logger.info(f"Running command: {command}")
 
             with open(output_file.path, "w+") as fh:
-                p = subprocess.Popen(command_with_plugin, stdout=fh)
+                p = subprocess.Popen(command, stdout=fh)
                 processes.append(p)
                 output_files.append(output_file.to_dict())
                 plugin_output_map[plugin_name] = output_file.path
@@ -248,6 +265,6 @@ def command(
     return create_task_result(
         output_files=output_files,
         workflow_id=workflow_id,
-        command=base_command_string,
+        command="vol -f",
         meta={},
     )
