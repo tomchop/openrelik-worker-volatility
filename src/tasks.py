@@ -88,6 +88,7 @@ def generate_base_command(output_path, task_config, plugins):
 
 def generate_commands(base_command, input_file, plugins):
     command_with_file = base_command.copy()
+    command_with_file.append(input_file.get("path"))
 
     for plugin_name, commands in plugins.items():
         command_with_plugin = command_with_file.copy()
@@ -191,7 +192,7 @@ def command(
 
     logger.info(f"Running Volatility3 with the following plugins: {plugins}")
 
-    for idx, nput_file in enumerate(input_files):
+    for idx, input_file in enumerate(input_files):
         total_plugins = len(plugins)
         completed_plugins = 0
         failed_plugins = 0
@@ -208,13 +209,13 @@ def command(
 
         processes = []
         plugin_output_map = {}
+        display_name = input_file.get("display_name")
 
         for plugin_name, command in generate_commands(
             base_command, input_file, plugins
         ):
             logger.info(f"Running plugin: {plugin_name}")
 
-            display_name = input_file.get("display_name")
             output_format = task_config.get("Output format") or "txt"
             output_filename = f"{display_name}_{plugin_name}.{output_format}"
             output_file = create_output_file(

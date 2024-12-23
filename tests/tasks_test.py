@@ -30,7 +30,7 @@ class TestVolatilityWorker(unittest.TestCase):
         )
 
     def test_generate_commands(self):
-        base_command = ["vol", "-o", "/tmp", "-f", "input_file"]
+        base_command = ["vol", "-o", "/tmp", "-f"]
         input_file = {"path": "input_file"}
         plugins = {
             "windows.info": {"params": []},
