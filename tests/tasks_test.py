@@ -2,6 +2,8 @@ import unittest
 
 from src import tasks
 
+from unittest.mock import Mock
+
 
 class TestVolatilityWorker(unittest.TestCase):
     def test_generate_base_command(self):
@@ -79,3 +81,14 @@ class TestVolatilityWorker(unittest.TestCase):
                 ),
             ],
         )
+
+    # mock the open builting
+    @unittest.mock.patch("builtins.open", new_callable=unittest.mock.mock_open)
+    def test_generate_report(self, mock_open):
+        test_output = {"plugin_name": "plugin_output_file"}
+        result = tasks.generate_report(test_output, "/tmp", "report_prefix")
+        result_dict = result.to_dict()
+        self.assertEqual(
+            result_dict["display_name"], "report_prefix-volatility-report.md"
+        )
+        self.assertEqual(result_dict["data_type"], "worker:openrelik:volatility:report")
