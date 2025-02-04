@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "openrelik-worker-template"
-version = "2024.11.27"
-description = "Description of the worker"
-authors = ["YOUR NAME <email@example.com>"]
+name = "openrelik-worker-volatility"
+version = "2025.02.04"
+description = "Run volatility3 on a memory dump."
+authors = ["Thomas Chopitea <tomchop@gmail.com>"]
 readme = "README.md"
 package-mode = false
 
