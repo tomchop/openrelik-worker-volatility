@@ -1,0 +1,12 @@
+services:
+  openrelik-worker-volatility:
+      container_name: openrelik-worker-volatility
+      build:
+        dockerfile: Dockerfile
+      image: ghcr.io/tomchop/openrelik-worker-volatility
+      restart: always
+      environment:
+        - REDIS_URL=redis://openrelik-redis:6379
+      volumes:
+        - ./data:/usr/share/openrelik/data
+      command: "celery --app=src.app worker --task-events --concurrency=4 --loglevel=INFO -Q openrelik-worker-volatility"
